@@ -10,25 +10,49 @@
     ConstraintKinds #-}
 
 import Control.Monad
+import Control.Arrow (first, second)
 import System.Random
 import Handlers
 import DesugarHandlers
 
-data Dist a = Dist
+pick :: [(a,Double)] -> Double -> a
+-- | Picks a value from a distribution using a real from [0,1].
+pick ((x,p):ps) v = if v <= p then x else pick ps (v-p)
+pick []         v = error $ "Sampling failed. Missing probability mass "
+                    ++ show v
+
+data Dist a = Dist [(a,Double)]
 
 sample :: StdGen -> Dist a -> (a,StdGen)
-pdf    :: Dist a -> a -> Double
+pdf    :: Eq a => Dist a -> a -> Double
 
-sample = undefined
-pdf = undefined
+sample g (Dist xs) = first (pick xs) $ randomR (0.0,1.0) g
+pdf (Dist xs) x =
+  case lookup x xs of
+    Just p -> p
+    Nothing -> 0
+exact (Dist xs) = xs
+score :: Double -> Dist a -> Dist a
+score p (Dist xs) = Dist $ map (second (*p)) xs
 
-[operation|Draw    a :: Dist a -> a      |]
-[operation|Observe a :: Dist a -> a -> ()|]
+instance Monad Dist where
+  return x = Dist [(x,1)]
+  (Dist xs) >>= f = Dist [(y,p*q) | (x,p) <- xs, (y,q) <- exact (f x)]
+
+[operation|forall a.Draw    :: Dist a -> a      |]
+[operation|forall a.Observe :: Dist Int -> Int -> ()|]
 
 [operation|Reject :: () |]
 
 [operation|Weight :: Double -> ()|]
 [operation|Barrier :: ()|]
+
+[handler|
+  Enumerate a :: Dist a handles {Draw,Weight} where
+    Return x   -> return x
+    Draw d k   -> d >>= k
+    Weight p k -> score p (k ())
+|]
 
 
 [handler|
@@ -88,6 +112,24 @@ pdf = undefined
 --       Weight p k ps -> 
   
 
+die = Dist $ map (\x -> (x,1/6)) [1..6] :: Dist Int
+type Prob a = forall h.([handles|h {Draw}    |],
+                        [handles|h {Observe} |]) => Comp h a
+example :: Prob Int
+example = do
+  x <- draw die
+  y <- draw die
+  let z = x + y
+  observe (return z) 3
+  return x
 
+solution :: Dist Int
+solution = (enumerate . weigh) example
+
+sampler :: StdGen -> Int
+sampler g = run g $ repeat' d d where
+  d = rejection example
+
+g = mkStdGen 0
 
 main = undefined
